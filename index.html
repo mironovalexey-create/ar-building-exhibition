@@ -19,9 +19,9 @@ button:active{background:#444;transform:scale(.97)}
 #stage{position:relative;flex:1;overflow:hidden;touch-action:none;background:#f7f7f7;cursor:grab;overscroll-behavior:none}
 #stage.dragging{cursor:grabbing}
 #canvas{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
-.page{position:absolute;left:0;top:0;display:none}
+.page{position:absolute;left:0;top:0;display:none;overflow:visible}
 .page.active{display:block}
-.page img{display:block;position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill;pointer-events:none;-webkit-user-drag:none}
+.page img{display:block;position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;-webkit-user-drag:none}
 #pager{position:absolute;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(20,20,20,.92);border-radius:12px;border:1px solid #444;z-index:30}
 #pageName{min-width:90px;text-align:center;font-size:14px}
 #counter{opacity:.65;font-size:12px}
@@ -54,7 +54,6 @@ button:active{background:#444;transform:scale(.97)}
     <button id="full" type="button" aria-label="Полный экран">⛶</button>
   </div>
 </header>
-
 <div id="stage">
   <div id="loading">Загрузка плана…</div>
   <div id="canvas">
@@ -70,212 +69,147 @@ button:active{background:#444;transform:scale(.97)}
   </div>
 </div>
 </div>
-
 <script>
 (function(){
 "use strict";
-
-const stage=document.getElementById("stage");
-const canvas=document.getElementById("canvas");
-const loading=document.getElementById("loading");
+const stage=document.getElementById("stage"), canvas=document.getElementById("canvas"), loading=document.getElementById("loading");
 const pages=[
-  {el:document.getElementById("page1"), img:document.getElementById("img1"), name:"1 этаж"},
-  {el:document.getElementById("page2"), img:document.getElementById("img2"), name:"6 этаж"}
+ {el:document.getElementById("page1"),img:document.getElementById("img1"),name:"1 этаж"},
+ {el:document.getElementById("page2"),img:document.getElementById("img2"),name:"6 этаж"}
 ];
-
-let current=0, scale=1, x=0, y=0;
-let baseW=1000, baseH=1000;
-let dragging=false, lastX=0, lastY=0;
-let touchMode=null, touchStartX=0, touchStartY=0, lastTouchX=0, lastTouchY=0;
-let startDistance=0, startScale=1, startMidX=0, startMidY=0;
-let moved=false;
+let current=0,scale=1,x=0,y=0,baseW=1000,baseH=1000;
+let dragging=false,lastX=0,lastY=0,touchMode=null,touchStartX=0,touchStartY=0,lastTouchX=0,lastTouchY=0;
+let pinchDistance=0,pinchScale=1,pinchMid={x:0,y:0},moved=false;
 
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function dist(a,b){return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}
-function midpoint(a,b){return {x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2};}
-
-function apply(){
-  canvas.style.transform="translate3d("+x+"px,"+y+"px,0) scale("+scale+")";
-}
-
+function distance(a,b){return Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);}
+function mid(a,b){return {x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2};}
+function apply(){canvas.style.transform="translate3d("+x+"px,"+y+"px,0) scale("+scale+")";}
 function fit(){
-  const sw=stage.clientWidth, sh=stage.clientHeight;
-  scale=Math.min(sw/baseW,sh/baseH)*0.96;
-  if(!isFinite(scale)||scale<=0) scale=0.001;
-  x=(sw-baseW*scale)/2;
-  y=(sh-baseH*scale)/2;
-  apply();
+ const sw=stage.clientWidth,sh=stage.clientHeight;
+ scale=Math.min(sw/baseW,sh/baseH)*.96;
+ scale=clamp(scale,.00005,100);
+ x=(sw-baseW*scale)/2;y=(sh-baseH*scale)/2;apply();
 }
-
-function zoomAt(factor,cx,cy){
-  const old=scale;
-  const next=clamp(old*factor,0.00005,100);
-  if(next===old)return;
-  const wx=(cx-x)/old, wy=(cy-y)/old;
-  scale=next;
-  x=cx-wx*scale;
-  y=cy-wy*scale;
-  apply();
+function zoomAt(f,cx,cy){
+ const old=scale,next=clamp(old*f,.00005,100);if(next===old)return;
+ const wx=(cx-x)/old,wy=(cy-y)/old;scale=next;x=cx-wx*scale;y=cy-wy*scale;apply();
 }
-
-function zoomCenter(factor){
-  zoomAt(factor,stage.clientWidth/2,stage.clientHeight/2);
-}
-
+function zoomCenter(f){zoomAt(f,stage.clientWidth/2,stage.clientHeight/2);}
 function showPage(i){
-  current=(i+pages.length)%pages.length;
-  pages.forEach((p,n)=>p.el.classList.toggle("active",n===current));
-  document.getElementById("pageName").textContent=pages[current].name;
-  document.getElementById("counter").textContent=(current+1)+" / "+pages.length;
-  fit();
+ current=(i+pages.length)%pages.length;
+ pages.forEach((p,n)=>p.el.classList.toggle("active",n===current));
+ document.getElementById("pageName").textContent=pages[current].name;
+ document.getElementById("counter").textContent=(current+1)+" / "+pages.length;
+ fit();
 }
-
-function loadSize(img){
-  return new Promise(resolve=>{
-    if(img.complete && img.naturalWidth){
-      resolve();
-      return;
-    }
-    img.addEventListener("load",resolve,{once:true});
-    img.addEventListener("error",()=>resolve(),{once:true});
-  });
+function svgRatio(img){
+ const vb=img.getAttribute("data-viewbox");
+ if(vb){const a=vb.trim().split(/\s+/).map(Number);if(a.length===4&&a[2]>0&&a[3]>0)return a[2]/a[3];}
+ return 1;
 }
-
 async function init(){
-  await Promise.all(pages.map(p=>loadSize(p.img)));
-  // SVGs are kept as separate vector files. Their viewBox proportions are used
-  // indirectly through the browser's intrinsic SVG rendering dimensions.
-  const img=pages[0].img;
-  const nw=img.naturalWidth||1000, nh=img.naturalHeight||1000;
-  const ratio=nw/nh;
-  baseW=1000;
-  baseH=1000/ratio;
-  pages.forEach(p=>{
-    p.el.style.width=baseW+"px";
-    p.el.style.height=baseH+"px";
-    p.img.style.width=baseW+"px";
-    p.img.style.height=baseH+"px";
-  });
-  loading.style.display="none";
-  showPage(0);
+ const imgs=pages.map(p=>new Promise(resolve=>{
+   const done=()=>resolve();
+   if(p.img.complete)done();else p.img.addEventListener("load",done,{once:true});
+ }));
+ // Read viewBox from the actual SVG files so iOS doesn't guess an intrinsic ratio.
+ for(const p of pages){
+   try{
+     const r=await fetch(p.img.src,{cache:"no-store"});
+     const t=await r.text();
+     const m=t.match(/<svg[^>]*\bviewBox="([^"]+)"/i);
+     if(m)p.img.setAttribute("data-viewbox",m[1]);
+   }catch(e){}
+ }
+ await Promise.all(imgs);
+ const ratio=svgRatio(pages[0].img);
+ baseW=1000;baseH=1000/ratio;
+ pages.forEach(p=>{
+   p.el.style.width=baseW+"px";p.el.style.height=baseH+"px";
+   p.img.style.width=baseW+"px";p.img.style.height=baseH+"px";
+ });
+ loading.style.display="none";showPage(0);
 }
 init();
 
-document.getElementById("prev").addEventListener("click",()=>showPage(current-1));
-document.getElementById("next").addEventListener("click",()=>showPage(current+1));
-document.getElementById("pPrev").addEventListener("click",()=>showPage(current-1));
-document.getElementById("pNext").addEventListener("click",()=>showPage(current+1));
+["prev","next","pPrev","pNext"].forEach(id=>{
+ document.getElementById(id).addEventListener("click",()=>{
+   if(id==="prev"||id==="pPrev")showPage(current-1);else showPage(current+1);
+ });
+});
 document.getElementById("fit").addEventListener("click",fit);
-document.getElementById("minus").addEventListener("click",()=>zoomCenter(0.8));
+document.getElementById("minus").addEventListener("click",()=>zoomCenter(.8));
 document.getElementById("plus").addEventListener("click",()=>zoomCenter(1.25));
-
 document.getElementById("full").addEventListener("click",async()=>{
-  try{
-    if(document.fullscreenElement){
-      await document.exitFullscreen();
-    }else if(stage.requestFullscreen){
-      await stage.requestFullscreen();
-    }else if(document.webkitFullscreenElement){
-      document.webkitExitFullscreen && document.webkitExitFullscreen();
-    }else if(stage.webkitRequestFullscreen){
-      stage.webkitRequestFullscreen();
-    }
-  }catch(e){}
+ try{
+   if(document.fullscreenElement){await document.exitFullscreen();}
+   else if(stage.requestFullscreen){await stage.requestFullscreen();}
+   else if(stage.webkitRequestFullscreen){stage.webkitRequestFullscreen();}
+ }catch(e){}
 });
 
-// Desktop mouse
 stage.addEventListener("mousedown",e=>{
-  if(e.button!==0)return;
-  dragging=true;moved=false;lastX=e.clientX;lastY=e.clientY;
-  stage.classList.add("dragging");
+ if(e.button!==0)return;dragging=true;moved=false;lastX=e.clientX;lastY=e.clientY;stage.classList.add("dragging");
 });
 window.addEventListener("mousemove",e=>{
-  if(!dragging)return;
-  const dx=e.clientX-lastX,dy=e.clientY-lastY;
-  if(Math.abs(dx)+Math.abs(dy)>2)moved=true;
-  x+=dx;y+=dy;lastX=e.clientX;lastY=e.clientY;apply();
+ if(!dragging)return;const dx=e.clientX-lastX,dy=e.clientY-lastY;
+ if(Math.abs(dx)+Math.abs(dy)>2)moved=true;x+=dx;y+=dy;lastX=e.clientX;lastY=e.clientY;apply();
 });
-window.addEventListener("mouseup",()=>{
-  dragging=false;stage.classList.remove("dragging");
-});
+window.addEventListener("mouseup",()=>{dragging=false;stage.classList.remove("dragging");});
 stage.addEventListener("wheel",e=>{
-  e.preventDefault();
-  const r=stage.getBoundingClientRect();
-  zoomAt(e.deltaY<0?1.12:0.89,e.clientX-r.left,e.clientY-r.top);
+ e.preventDefault();const r=stage.getBoundingClientRect();
+ zoomAt(e.deltaY<0?1.12:.89,e.clientX-r.left,e.clientY-r.top);
 },{passive:false});
 
-// iOS / touch
-function touchCenter(ts){
-  const a=ts[0],b=ts[1];
-  return midpoint(a,b);
-}
 stage.addEventListener("touchstart",e=>{
-  e.preventDefault();
-  moved=false;
-  if(e.touches.length===1){
-    touchMode="pan";
-    touchStartX=lastTouchX=e.touches[0].clientX;
-    touchStartY=lastTouchY=e.touches[0].clientY;
-  }else if(e.touches.length>=2){
-    touchMode="pinch";
-    startDistance=dist(e.touches[0],e.touches[1]);
-    startScale=scale;
-    const r=stage.getBoundingClientRect(),m=touchCenter(e.touches);
-    startMidX=m.x-r.left;startMidY=m.y-r.top;
-  }
+ e.preventDefault();moved=false;
+ if(e.touches.length===1){
+   touchMode="pan";touchStartX=lastTouchX=e.touches[0].clientX;touchStartY=lastTouchY=e.touches[0].clientY;
+ }else if(e.touches.length>=2){
+   touchMode="pinch";pinchDistance=distance(e.touches[0],e.touches[1]);pinchScale=scale;
+   const r=stage.getBoundingClientRect(),m=mid(e.touches[0],e.touches[1]);
+   pinchMid={x:m.x-r.left,y:m.y-r.top};
+ }
 },{passive:false});
 
 stage.addEventListener("touchmove",e=>{
-  e.preventDefault();
-  if(e.touches.length>=2){
-    if(touchMode!=="pinch"){
-      touchMode="pinch";
-      startDistance=dist(e.touches[0],e.touches[1]);
-      startScale=scale;
-    }
-    const d=dist(e.touches[0],e.touches[1]);
-    if(startDistance>0){
-      const factor=d/startDistance;
-      const next=clamp(startScale*factor,0.00005,100);
-      const wx=(startMidX-x)/scale, wy=(startMidY-y)/scale;
-      scale=next;
-      x=startMidX-wx*scale;
-      y=startMidY-wy*scale;
-      apply();
-      moved=true;
-    }
-  }else if(e.touches.length===1 && touchMode==="pan"){
-    const t=e.touches[0];
-    const dx=t.clientX-lastTouchX,dy=t.clientY-lastTouchY;
-    if(Math.abs(t.clientX-touchStartX)+Math.abs(t.clientY-touchStartY)>8)moved=true;
-    x+=dx;y+=dy;lastTouchX=t.clientX;lastTouchY=t.clientY;apply();
-  }
+ e.preventDefault();
+ if(e.touches.length>=2){
+   if(touchMode!=="pinch"){
+     touchMode="pinch";pinchDistance=distance(e.touches[0],e.touches[1]);pinchScale=scale;
+     const r=stage.getBoundingClientRect(),m=mid(e.touches[0],e.touches[1]);pinchMid={x:m.x-r.left,y:m.y-r.top};
+   }
+   const d=distance(e.touches[0],e.touches[1]);
+   if(pinchDistance>0){
+     const next=clamp(pinchScale*d/pinchDistance,.00005,100);
+     const wx=(pinchMid.x-x)/scale,wy=(pinchMid.y-y)/scale;
+     scale=next;x=pinchMid.x-wx*scale;y=pinchMid.y-wy*scale;apply();moved=true;
+   }
+ }else if(e.touches.length===1&&touchMode==="pan"){
+   const t=e.touches[0],dx=t.clientX-lastTouchX,dy=t.clientY-lastTouchY;
+   if(Math.abs(t.clientX-touchStartX)+Math.abs(t.clientY-touchStartY)>8)moved=true;
+   x+=dx;y+=dy;lastTouchX=t.clientX;lastTouchY=t.clientY;apply();
+ }
 },{passive:false});
 
 stage.addEventListener("touchend",e=>{
-  e.preventDefault();
-  if(e.touches.length===0){
-    if(touchMode==="pan" && moved){
-      const dx=(lastTouchX-touchStartX);
-      if(Math.abs(dx)>70){
-        if(dx<0)showPage(current+1); else showPage(current-1);
-      }
-    }
-    touchMode=null;
-  }else if(e.touches.length===1){
-    // After pinch, continue as a one-finger pan without jumping.
-    touchMode="pan";
-    lastTouchX=e.touches[0].clientX;
-    lastTouchY=e.touches[0].clientY;
-  }
+ e.preventDefault();
+ if(e.touches.length===0){
+   if(touchMode==="pan"&&moved){
+     const dx=lastTouchX-touchStartX;
+     if(Math.abs(dx)>70){if(dx<0)showPage(current+1);else showPage(current-1);}
+   }
+   touchMode=null;
+ }else if(e.touches.length===1){
+   touchMode="pan";lastTouchX=e.touches[0].clientX;lastTouchY=e.touches[0].clientY;
+ }
 },{passive:false});
 
-window.addEventListener("resize",()=>fit());
-
+window.addEventListener("resize",fit);
 document.addEventListener("gesturestart",e=>e.preventDefault(),{passive:false});
 document.addEventListener("gesturechange",e=>e.preventDefault(),{passive:false});
 document.addEventListener("gestureend",e=>e.preventDefault(),{passive:false});
-
 })();
 </script>
 </body>
